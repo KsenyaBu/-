@@ -15,8 +15,8 @@ static const double A1 = -1;
 static const double A2 = 2;
 static const double B1 = -2;
 static const double B2 = 2;
-static int cols = 20;             //число точек сетки по X
-static int rows = 20;             //число точек сетки по Y
+static int cols = 160;             //число точек сетки по X
+static int rows = 160;             //число точек сетки по Y
 static double cur_error = 1;
 static double error = 0.000001;
 static double x_step;
@@ -196,7 +196,7 @@ static inline void calculate_next_P(double tau){
 
 int main(int argc, char ** argv)
 {
-    char filename[] = "ksy_20.txt";
+    char filename[] = "ksy_100.txt";
     FILE *f = fopen(filename, "w");
 	if (f == NULL)
 	{
@@ -239,7 +239,7 @@ int main(int argc, char ** argv)
     set_cell(F_matrix, 1, 1, F(X(1), Y(1)) + phi(X(1), Y(0))/(y_step * y_step) + phi(X(0), Y(1))/(x_step * x_step));
     set_cell(F_matrix, 1, rows - 2, F(X(1), Y(rows-2)) + phi(X(1), Y(rows-1))/(y_step * y_step) + phi(X(0), Y(rows-2))/(x_step * x_step));
     set_cell(F_matrix, cols - 2, 1, F(X(cols - 2), Y(1)) + phi(X(cols-2), Y(0))/(y_step * y_step) + phi(X(cols-1), Y(1))/(x_step * x_step));
-    set_cell(F_matrix, i, j, F(X(cols-2), Y(rows-2)) + phi(X(cols-2), Y(rows-1))/(y_step * y_step) + phi(X(cols-1), Y(rows-2))/(x_step * x_step));
+    set_cell(F_matrix, cols-2, rows-2, F(X(cols-2), Y(rows-2)) + phi(X(cols-2), Y(rows-1))/(y_step * y_step) + phi(X(cols-1), Y(rows-2))/(x_step * x_step));
 /*    fprintf(f,"exact\n");
     for (j = 0; j <= rows-1; j++)
     {
