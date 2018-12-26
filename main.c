@@ -1,4 +1,4 @@
-#include "io_utils.h"
+#include "io_utils_new.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -18,12 +18,16 @@ static double start_time = 0;
 static double end_time = 0;
 
 /** Наперед заданная точность */
-static double epsilon = 0.0001;
+static double epsilon = 0.00001;
 
 static int first_internal_row = -1;
+static int first_second_internal_row = -1;
 static int last_internal_row = -1;
+static int last_second_internal_row = -1;
 static int first_internal_col = -1;
+static int first_second_internal_col = -1;
 static int last_internal_col = -1;
+static int last_second_internal_col = -1;
 
 /** Матрицы для хранения данных, использующиеся в расчетах алгоритма. */
 static double *P_neigh[4];
@@ -59,8 +63,7 @@ F(double x, double y)
 }
 
 /** Выделяем память под границы. */
-static inline void
-create_borders(int border_id, bool exists)
+static inline void create_borders(int border_id, bool exists)
 {
 	if (exists) {
 		int elem_count = border_size[border_id];
@@ -75,8 +78,7 @@ create_borders(int border_id, bool exists)
 	}
 }
 
-static inline double
-local_scalar(double *a, double *b)
+static inline double local_scalar(double *a, double *b)
 {
 	double ret = 0;
 	#pragma omp parallel for reduction(+:ret)
@@ -88,46 +90,223 @@ local_scalar(double *a, double *b)
 }
 
 
-static inline double
-laplas_5(double *matrix, int row, int col, double **borders)
+static inline double laplas_5(double *matrix, int row, int col, double **borders)
 {
+	double a_11 = 0, a_01 = 0, a_21 = 0, a_10 = 0, a_12 = 0; 
+	double tmp1 = 0;
+	double tmp2 = 0;
 	assert(row >= first_internal_row && row <= last_internal_row);
 	assert(col >= first_internal_col && col <= last_internal_col);
-	double a_ij = get_cell(matrix, row, col);
-	double a_imj;
-	if (row > 0)
-		a_imj = get_cell(matrix, row - 1, col);
-	else
-		a_imj = borders[BOTTOM_BORDER][col];
-	double a_ipj;
-	if (row + 1 < cell_rows) {
-		a_ipj = get_cell(matrix, row + 1, col);
-	} else {
-		assert(borders[TOP_BORDER] != NULL);
-		a_ipj = borders[TOP_BORDER][col];
-	}
-	double a_ijm;
-	if (col > 0) {
-		a_ijm = get_cell(matrix, row, col - 1);
-	} else {
-		assert(borders[LEFT_BORDER] != NULL);
-		a_ijm = borders[LEFT_BORDER][row];
-	}
-	double a_ijp;
-	if (col + 1 < cell_cols) {
-		a_ijp = get_cell(matrix, row, col + 1);
-	} else {
-		assert(borders[RIGHT_BORDER] != NULL);
-		a_ijp = borders[RIGHT_BORDER][row];
-	}
+	a_11 = get_cell(matrix, row, col);
+	/* для самых внутренних точек */
+	if ((row >= first_second_internal_row) && (row <= last_second_internal_row) && (col >= first_second_internal_col) && (col <= last_second_internal_col))
+	{
+		if (row > 0)
+			a_10 = get_cell(matrix, row - 1, col);
+		else{
+			assert(borders[BOTTOM_BORDER] != NULL);
+			a_10 = borders[BOTTOM_BORDER][col];
+		}
+		if (row < cell_rows - 1) 
+			a_12 = get_cell(matrix, row + 1, col);
+		else {
+			assert(borders[TOP_BORDER] != NULL);
+			a_12 = borders[TOP_BORDER][col];
+		}
+		if (col > 0)
+			a_01 = get_cell(matrix, row, col - 1);
+		else {
+			assert(borders[LEFT_BORDER] != NULL);
+			a_01 = borders[LEFT_BORDER][row];
+		}
+		if (col < cell_cols - 1)
+			a_21 = get_cell(matrix, row, col + 1);
+		else {
+			assert(borders[RIGHT_BORDER] != NULL);
+			a_21 = borders[RIGHT_BORDER][row];
+		}
 
-	double tmp1 = coef_h_1 * (a_imj - 2 * a_ij + a_ipj);
-	double tmp2 = coef_h_2 * (a_ijm - 2 * a_ij + a_ijp);
+		tmp1 = coef_h_1 * (a_01 - 2 * a_11 + a_21);
+		tmp2 = coef_h_2 * (a_10 - 2 * a_11 + a_12);
+	}
+	/* левые внутренние точки */
+	else if (col < first_second_internal_col)
+	{
+		/* угловая внутренняя точка на пересечении верхней и левой границы */
+		if (row < first_second_internal_row)
+		{
+			if (col < cell_cols - 1)
+				a_21 = get_cell(matrix, row, col + 1);
+			else {
+				assert(borders[RIGHT_BORDER] != NULL);
+				a_21 = borders[RIGHT_BORDER][row];
+			}
+			if (row < cell_rows - 1) 
+				a_12 = get_cell(matrix, row + 1, col);
+			else {
+				assert(borders[TOP_BORDER] != NULL);
+				a_12 = borders[TOP_BORDER][col];
+			}
+			tmp1 = coef_h_1 * (-2 * a_11 + a_21);
+			tmp2 = coef_h_2 * (-2 * a_11 + a_12);
+		}
+		/* угловая внутренняя точка на пересечении нижней и левой границы */
+		else if (row > last_second_internal_row)
+		{
+			if (row > 0)
+				a_10 = get_cell(matrix, row - 1, col);
+			else{
+				assert(borders[BOTTOM_BORDER] != NULL);
+				a_10 = borders[BOTTOM_BORDER][col];
+			}
+			if (col < cell_cols - 1)
+				a_21 = get_cell(matrix, row, col + 1);
+			else {
+				assert(borders[RIGHT_BORDER] != NULL);
+				a_21 = borders[RIGHT_BORDER][row];
+			}
+			tmp1 = coef_h_1 * (-2 * a_11 + a_21);
+			tmp2 = coef_h_2 * (-2 * a_11 + a_10);
+		}
+		else
+		{
+			/*все остальные левые точки*/
+			if (col < cell_cols - 1)
+				a_21 = get_cell(matrix, row, col + 1);
+			else {
+				assert(borders[RIGHT_BORDER] != NULL);
+				a_21 = borders[RIGHT_BORDER][row];
+			}
+			if (row > 0)
+				a_10 = get_cell(matrix, row - 1, col);
+			else{
+				assert(borders[BOTTOM_BORDER] != NULL);
+				a_10 = borders[BOTTOM_BORDER][col];
+			}
+			if (row < cell_rows - 1) 
+				a_12 = get_cell(matrix, row + 1, col);
+			else {
+				assert(borders[TOP_BORDER] != NULL);
+				a_12 = borders[TOP_BORDER][col];
+			}
+			tmp1 = coef_h_1 * (-2 * a_11 + a_21);
+			tmp2 = coef_h_2 * (a_10 - 2 * a_11 + a_12);
+		}
+	}
+	/* правые внутренние точки */
+	else if (col > last_second_internal_col)
+	{
+		/* угловая внутренняя точка на пересечении верхней и правой границы */
+		if (row < first_second_internal_row)
+		{
+			if (col > 0)
+				a_01 = get_cell(matrix, row, col - 1);
+			else {
+				assert(borders[LEFT_BORDER] != NULL);
+				a_01 = borders[LEFT_BORDER][row];
+			}
+			if (row < cell_rows - 1) 
+				a_12 = get_cell(matrix, row + 1, col);
+			else {
+				assert(borders[TOP_BORDER] != NULL);
+				a_12 = borders[TOP_BORDER][col];
+			}
+			tmp1 = coef_h_1 * (-2 * a_11 + a_01);
+			tmp2 = coef_h_2 * (-2 * a_11 + a_12);		
+		}
+		/* угловая внутренняя точка на пересечении нижней и правой границы */
+		else if (row > last_second_internal_row)
+		{
+			if (row > 0)
+				a_10 = get_cell(matrix, row - 1, col);
+			else{
+				assert(borders[BOTTOM_BORDER] != NULL);
+				a_10 = borders[BOTTOM_BORDER][col];
+			}
+			if (col > 0)
+				a_01 = get_cell(matrix, row, col - 1);
+			else {
+				assert(borders[LEFT_BORDER] != NULL);
+				a_01 = borders[LEFT_BORDER][row];
+			}
+			tmp1 = coef_h_1 * (-2 * a_11 + a_01);
+			tmp2 = coef_h_2 * (-2 * a_11 + a_10);
+		}
+		else
+		{
+			if (row > 0)
+				a_10 = get_cell(matrix, row - 1, col);
+			else{
+				assert(borders[BOTTOM_BORDER] != NULL);
+				a_10 = borders[BOTTOM_BORDER][col];
+			}
+			if (col > 0)
+				a_01 = get_cell(matrix, row, col - 1);
+			else {
+				assert(borders[LEFT_BORDER] != NULL);
+				a_01 = borders[LEFT_BORDER][row];
+			}
+			if (row < cell_rows - 1) 
+				a_12 = get_cell(matrix, row + 1, col);
+			else {
+				assert(borders[TOP_BORDER] != NULL);
+				a_12 = borders[TOP_BORDER][col];
+			}
+			tmp1 = coef_h_1 * (a_01 - 2 * a_11);
+			tmp2 = coef_h_2 * (a_10 - 2 * a_11 + a_12);
+		}
+	}
+	/* внутренние верхние точки */
+	else if (row < first_second_internal_row)
+	{
+		if (row < cell_rows - 1) 
+			a_12 = get_cell(matrix, row + 1, col);
+		else {
+			assert(borders[TOP_BORDER] != NULL);
+			a_12 = borders[TOP_BORDER][col];
+		}
+		if (col > 0)
+			a_01 = get_cell(matrix, row, col - 1);
+		else {
+			assert(borders[LEFT_BORDER] != NULL);
+			a_01 = borders[LEFT_BORDER][row];
+		}
+		if (col < cell_cols - 1)
+			a_21 = get_cell(matrix, row, col + 1);
+		else {
+			assert(borders[RIGHT_BORDER] != NULL);
+			a_21 = borders[RIGHT_BORDER][row];
+		}
+		tmp1 = coef_h_1 * (a_01 - 2 * a_11 + a_21);
+		tmp2 = coef_h_2 * (-2 * a_11 + a_12);		
+	}
+	else if (row > last_second_internal_row)
+	{
+		if (col > 0)
+			a_01 = get_cell(matrix, row, col - 1);
+		else {
+			assert(borders[LEFT_BORDER] != NULL);
+			a_01 = borders[LEFT_BORDER][row];
+		}
+		if (col < cell_cols - 1)
+			a_21 = get_cell(matrix, row, col + 1);
+		else {
+			assert(borders[RIGHT_BORDER] != NULL);
+			a_21 = borders[RIGHT_BORDER][row];
+		}
+		if (row > 0)
+			a_10 = get_cell(matrix, row - 1, col);
+		else{
+			assert(borders[BOTTOM_BORDER] != NULL);
+			a_10 = borders[BOTTOM_BORDER][col];
+		}
+		tmp1 = coef_h_1 * (a_01 - 2 * a_11 + a_21);
+		tmp2 = coef_h_2 * (-2 * a_11 + a_10);
+	}
 	return tmp1 + tmp2;
 }
 
-static inline void
-laplas_5_matrix(double *src, double **src_borders, double *dst)
+static inline void laplas_5_matrix(double *src, double **src_borders, double *dst)
 {
 	#pragma omp parallel for
 	for (int i = first_internal_row; i <= last_internal_row; ++i) {
@@ -158,7 +337,7 @@ calculate_next_P(double tau, double *discrepancy_matrix,
 				double local_increment = cell - old;
 				increment += local_increment * local_increment;
 				double local_error = cell - exact(X(j), Y(i));
-				error += local_error * local_error * step;
+				error += local_error * local_error;
 			}
 		}
 	}
@@ -182,12 +361,73 @@ calculate_next_P(double tau, double *discrepancy_matrix,
 static inline void
 calculate_next_R()
 {
+	/* Сейчас будет жесть. Уточняю алгоритм для идеальной сходимости */
+
+	/* Совсем внутренние точки */
 	#pragma omp parallel for
-	for (int i = first_internal_row; i <= last_internal_row; ++i) {
-		for (int j = first_internal_col; j <= last_internal_col; ++j) {
+	for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
 			set_cell(R, i, j, -laplas_5(P, i, j, P_neigh) - F(X(j), Y(i)));
 		}
 	}
+
+	if (is_bottom)
+	{	
+		/* Внутренние точки вблизи верхней границы */
+		#pragma omp parallel for
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
+			set_cell(R, 1, j, -laplas_5(P, 1, j, P_neigh) - F(X(j), Y(1)) - phi(X(j), Y(0)) * coef_h_2);
+		}
+		if (is_left)
+		{
+			/* угловая на пересечении левой и верхней границы */
+			set_cell(R, 1, 1, -laplas_5(P, 1, 1, P_neigh) - F(X(1), Y(1)) - phi(X(1), Y(0)) * coef_h_2 - phi(X(0), Y(1)) * coef_h_1);
+		}
+		if (is_right)
+		{
+			/* угловая на пересечении правой и верхней границы */
+			set_cell(R, 1, cell_cols - 2, -laplas_5(P, 1, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(1)) - phi(X(cell_cols - 2), Y(0)) * coef_h_2 - phi(X(cell_cols - 1), Y(1)) * coef_h_1);
+		}
+	}
+
+	if (is_top)
+	{
+		/* Внутренние точки вблизи нижней границы */
+		#pragma omp parallel for
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
+			set_cell(R, cell_rows - 2, j, -laplas_5(P, cell_rows - 2, j, P_neigh) - F(X(j), Y(cell_rows - 2)) - phi(X(j), Y(cell_rows - 1)) * coef_h_2);
+		}
+		if (is_left)
+		{
+			/* угловая на пересечении левой и нижней границы */
+			set_cell(R, cell_rows - 2, 1, -laplas_5(P, cell_rows - 2, 1, P_neigh) - F(X(1), Y(cell_rows - 2)) - phi(X(1), Y(cell_rows - 1)) * coef_h_2 - phi(X(0), Y(cell_rows - 2)) * coef_h_1);
+		}
+		if (is_right)
+		{
+			/* угловая на пересечении правой и верхней границы */
+			set_cell(R, cell_rows - 2, cell_cols - 2, -laplas_5(P, cell_rows - 2, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(cell_rows - 2)) - phi(X(cell_cols - 2), Y(cell_rows - 1)) * coef_h_2 - phi(X(cell_cols - 1), Y(cell_rows - 2)) * coef_h_1);
+		}
+		
+	}
+
+	if (is_left)
+	{
+		/*Внутренние точки вблизи левой границы */
+		#pragma omp parallel for
+		for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+			set_cell(R, i, 1, -laplas_5(P, i, 1, P_neigh) - F(X(1), Y(i)) - phi(X(0), Y(i)) * coef_h_1);
+		}		
+	}
+
+	if (is_right)
+	{
+		/*Внутренние точки вблизи левой границы */
+		#pragma omp parallel for
+		for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+			set_cell(R, i, cell_cols - 2, -laplas_5(P, i, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(i)) - phi(X(cell_cols - 1), Y(i)) * coef_h_1);
+		}		
+	}
+
 	#pragma omp parallel if (border_count <= 2)
 	#pragma omp sections
 	{
@@ -243,6 +483,7 @@ create_matrices()
 	create_borders(LEFT_BORDER, ! is_left);
 	create_borders(RIGHT_BORDER, ! is_right);
 
+	/* Заполняем начальное приближение P граничными значениями */
 	if (is_bottom) {
 		for (int i = 0; i < cell_cols; ++i)
 			set_cell(P, 0, i, phi(X(i), Y(0)));
@@ -268,29 +509,107 @@ create_matrices()
 	receive_borders(P_neigh, req);	       //Получаем границы от соседних процессов
 	sync_receive_borders(req, 4);	       //Ждем завершения, пока 4 запроса будут обработаны
 
-	/* Рассчитываем внутренние точки R. */
-	if (is_bottom)
+	/* Внутренние индексы блока для каждого процесса по отдельности. */
+	if (is_bottom){
 		first_internal_row = 1;
-	else
+		first_second_internal_row = 2;
+	}
+	else{
 		first_internal_row = 0;
-	if (is_top)
+		first_second_internal_row = 0;
+	}
+	if (is_top){
 		last_internal_row = cell_rows - 2;
-	else
+		last_second_internal_row = cell_rows - 3;
+	}
+	else{
 		last_internal_row = cell_rows - 1;
-	if (is_left)
+		last_second_internal_row = cell_rows - 1;
+	}
+	if (is_left){
 		first_internal_col = 1;
-	else
+		first_second_internal_col = 2;
+	}
+	else{
 		first_internal_col = 0;
-	if (is_right)
+		first_second_internal_col = 0;
+	}
+	if (is_right){
 		last_internal_col = cell_cols - 2;
-	else
+		last_second_internal_col = cell_cols - 3;
+	}
+	else{
 		last_internal_col = cell_cols - 1;
+		last_second_internal_col = cell_cols - 1;
+	} 
+
+	/* Сейчас будет жесть. Уточняю алгоритм для идеальной сходимости */
+
+	/* Совсем внутренние точки */
 	#pragma omp parallel for
-	for (int i = first_internal_row; i <= last_internal_row; ++i) {
-		for (int j = first_internal_col; j <= last_internal_col; ++j) {
+	for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
 			set_cell(R, i, j, -laplas_5(P, i, j, P_neigh) - F(X(j), Y(i)));
 		}
 	}
+
+	if (is_bottom)
+	{	
+		/* Внутренние точки вблизи верхней границы */
+		#pragma omp parallel for
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
+			set_cell(R, 1, j, -laplas_5(P, 1, j, P_neigh) - F(X(j), Y(1)) - phi(X(j), Y(0)) * coef_h_2);
+		}
+		if (is_left)
+		{
+			/* угловая на пересечении левой и верхней границы */
+			set_cell(R, 1, 1, -laplas_5(P, 1, 1, P_neigh) - F(X(1), Y(1)) - phi(X(1), Y(0)) * coef_h_2 - phi(X(0), Y(1)) * coef_h_1);
+		}
+		if (is_right)
+		{
+			/* угловая на пересечении правой и верхней границы */
+			set_cell(R, 1, cell_cols - 2, -laplas_5(P, 1, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(1)) - phi(X(cell_cols - 2), Y(0)) * coef_h_2 - phi(X(cell_cols - 1), Y(1)) * coef_h_1);
+		}
+	}
+
+	if (is_top)
+	{
+		/* Внутренние точки вблизи нижней границы */
+		#pragma omp parallel for
+		for (int j = first_second_internal_col; j <= last_second_internal_col; ++j) {
+			set_cell(R, cell_rows - 2, j, -laplas_5(P, cell_rows - 2, j, P_neigh) - F(X(j), Y(cell_rows - 2)) - phi(X(j), Y(cell_rows - 1)) * coef_h_2);
+		}
+		if (is_left)
+		{
+			/* угловая на пересечении левой и нижней границы */
+			set_cell(R, cell_rows - 2, 1, -laplas_5(P, cell_rows - 2, 1, P_neigh) - F(X(1), Y(cell_rows - 2)) - phi(X(1), Y(cell_rows - 1)) * coef_h_2 - phi(X(0), Y(cell_rows - 2)) * coef_h_1);
+		}
+		if (is_right)
+		{
+			/* угловая на пересечении правой и верхней границы */
+			set_cell(R, cell_rows - 2, cell_cols - 2, -laplas_5(P, cell_rows - 2, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(cell_rows - 2)) - phi(X(cell_cols - 2), Y(cell_rows - 1)) * coef_h_2 - phi(X(cell_cols - 1), Y(cell_rows - 2)) * coef_h_1);
+		}
+		
+	}
+
+	if (is_left)
+	{
+		/*Внутренние точки вблизи левой границы */
+		#pragma omp parallel for
+		for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+			set_cell(R, i, 1, -laplas_5(P, i, 1, P_neigh) - F(X(1), Y(i)) - phi(X(0), Y(i)) * coef_h_1);
+		}		
+	}
+
+	if (is_right)
+	{
+		/*Внутренние точки вблизи левой границы */
+		#pragma omp parallel for
+		for (int i = first_second_internal_row; i <= last_second_internal_row; ++i) {
+			set_cell(R, i, cell_cols - 2, -laplas_5(P, i, cell_cols - 2, P_neigh) - F(X(cell_cols - 2), Y(i)) - phi(X(cell_cols - 1), Y(i)) * coef_h_1);
+		}		
+	}
+
 	send_borders(R);
 	receive_borders(R_neigh, req);
 	sync_receive_borders(req, 4);
@@ -366,14 +685,10 @@ main(int argc, char **argv)
 	h_2 = (B_2 - B_1) / (table_height - 1);  // table_height - 1 = N
 	coef_h_1 = 1 / (h_1 * h_1);
 	coef_h_2 = 1 / (h_2 * h_2);
-#ifdef _OPENMP
-	omp_set_dynamic(0);	 // запрещаем библиотеке openmp менять число потоков во время исполнения
-	omp_set_num_threads(5);  // создаем заранее известное число потоков - 5
-#endif
 	MPI_Init(&argc, &argv);  // Инициализация MPI
 	MPI_Comm_size(MPI_COMM_WORLD, &proc_count); //Получение общего числа процессов 
 	MPI_Comm_rank(MPI_COMM_WORLD, &proc_rank);  //Получение порядкового номера процесса 
-#ifdef _OPENMP
+
 	if (proc_rank == 0) {                    //Нулевой процесс определяет количество потоков
                 int num_of_threads = 0;
                 #pragma omp parallel		 //Создание параллельного региона
@@ -383,7 +698,6 @@ main(int argc, char **argv)
                 }
                 printf("Number of threads = %d\n", num_of_threads);
         }
-#endif
 
 	/**
  	* Распределение матрицы по процессам, вычисление процессорной сетки
